@@ -1,26 +1,56 @@
+require("dotenv").config({path: "../.env"});
+
 const mongoose = require("mongoose");
-const initData = require("./data.js");
-const Listing = require("../models/listing.js");
+const mbxGeocoding = require("@mapbox/mapbox-sdk/services/geocoding");
 
-const MONGO_URL = "mongodb://127.0.0.1:27017/wanderlust";
+const Listing = require("../models/listing");
+const initData = require("./data");
 
-main()
-  .then(() => {
-    console.log("connected to DB");
-  })
-  .catch((err) => {
-    console.log(err);
-  });
+// DB & Mapbox setup
+const MONGO_URL = process.env.ATLASDB_URL;
+const geocodingClient = mbxGeocoding({ accessToken: process.env.MAPBOX_TOKEN });
+
+// 👉 YOUR USER ID (from REPL)
+const USER_ID = "69172a81dc057e6498b0b875";
 
 async function main() {
   await mongoose.connect(MONGO_URL);
+  console.log("connected to DB");
 }
 
+main().catch((err) => console.log(err));
+
 const initDB = async () => {
-  await Listing.deleteMany({});
-  initData.data = initData.data.map((obj) => ({...obj,owner: "65bf87a39b00b6095a998f83"}))
-  await Listing.insertMany(initData.data);
-  console.log("data was initialized");
+  try {
+    console.log("Deleting old listings...");
+    await Listing.deleteMany({});
+
+    // Loop through each listing
+    for (let listing of initData.data) {
+      const geoData = await geocodingClient
+        .forwardGeocode({
+          query: `${listing.location}, ${listing.country}`,
+          limit: 1,
+        })
+        .send();
+
+      const geometry = geoData.body.features[0]?.geometry;
+
+      if (!geometry) {
+        console.log("❌ Could not find map location for:", listing.title);
+        continue;
+      }
+
+      listing.owner = USER_ID;
+      listing.geometry = geometry;
+
+      await Listing.create(listing);
+    }
+
+    console.log("🌱 Seeding completed successfully!");
+  } catch (err) {
+    console.log("❌ Seeding error:", err);
+  }
 };
 
 initDB();
